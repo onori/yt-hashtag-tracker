@@ -1,0 +1,13 @@
+node_modules/
+.gitignore
+*.md
+*.log
+*.lock
+*.toml
+*.yaml
+*.yml
+tsconfig.json
+.env*
+dist/
+*.json
+!appsscript.json

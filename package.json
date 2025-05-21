@@ -1,0 +1,31 @@
+{
+	"name": "yt-hashtag-tracker",
+	"engines": {
+		"node": ">=22.13.0"
+	},
+	"version": "1.0.0",
+	"description": "YouTube ハッシュタグトラッカー",
+	"main": "src/index.ts",
+	"scripts": {
+		"start": "ts-node src/index.ts",
+		"deploy": "clasp push && clasp deploy",
+		"push": "clasp push",
+		"pull": "clasp pull",
+		"open": "clasp open",
+		"watch": "tsc -w"
+	},
+	"keywords": ["youtube", "hashtag", "google-apps-script", "spreadsheet"],
+	"author": "",
+	"license": "ISC",
+	"type": "module",
+	"dependencies": {
+		"@google/clasp": "^2.4.2",
+		"typescript": "^5.0.0"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "1.9.4",
+		"@types/google-apps-script": "^1.0.97",
+		"@types/node": "^20.0.0",
+		"ts-node": "^10.9.1"
+	}
+}
