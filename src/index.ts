@@ -35,6 +35,9 @@ function main() {
 		// 重複を削除して最新のデータを残す
 		removeDuplicateVideos(sheet);
 
+		// 日次統計を更新
+		updateDailyStats(spreadsheet);
+
 		Logger.log("処理が完了しました。");
 	} catch (error) {
 		const errorMessage = error instanceof Error ? error.message : String(error);
@@ -351,6 +354,106 @@ function removeDuplicateVideos(sheet: GoogleAppsScript.Spreadsheet.Sheet) {
 	const duplicateCount = data.length - uniqueData.length;
 	if (duplicateCount > 0) {
 		Logger.log(`重複する動画を ${duplicateCount} 件削除しました。`);
+	}
+}
+
+// 日次統計を更新する関数
+function updateDailyStats(
+	spreadsheet: GoogleAppsScript.Spreadsheet.Spreadsheet,
+) {
+	try {
+		const STATS_SHEET_NAME = "日次統計";
+		const statsSheet = getOrCreateSheet(spreadsheet, STATS_SHEET_NAME);
+
+		// ヘッダーを設定
+		if (statsSheet.getLastRow() === 0) {
+			const headers = [
+				"日付",
+				"ハッシュタグ",
+				"動画タイプ",
+				"動画数",
+				"チャンネル数",
+				"総再生回数",
+			];
+			statsSheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+		}
+
+		const today = new Date();
+		today.setHours(0, 0, 0, 0);
+		const todayStr = Utilities.formatDate(today, "Asia/Tokyo", "yyyy/MM/dd");
+
+		const dataSheet = spreadsheet.getSheetByName(SHEET_NAME);
+		if (!dataSheet) {
+			throw new Error(`シート '${SHEET_NAME}' が見つかりません`);
+		}
+
+		// データを取得（ヘッダー行を除く）
+		const lastRow = dataSheet.getLastRow();
+		if (lastRow <= 1) return; // データがない場合はスキップ
+
+		const dataRange = dataSheet.getRange(2, 1, lastRow - 1, 15); // 15列分のデータを取得
+		const data = dataRange.getValues();
+
+		// 各ハッシュタグと動画タイプごとに統計を計算
+		for (const hashtag of TARGET_HASHTAGS) {
+			// 通常動画の統計
+			const regularVideos = data.filter(
+				(row) => row[1] === hashtag && row[3] === "通常",
+			);
+
+			// 通常動画の統計を常に出力（動画がなくても0で出力）
+			const regularChannelCount = new Set(regularVideos.map((row) => row[6]))
+				.size; // チャンネル名でユニークカウント
+			const regularTotalViews = regularVideos.reduce(
+				(sum, row) => sum + (Number.parseInt(row[10] || "0", 10) || 0),
+				0,
+			);
+
+			statsSheet.appendRow([
+				todayStr,
+				hashtag,
+				"通常",
+				regularVideos.length,
+				regularChannelCount,
+				regularTotalViews,
+			]);
+
+			// ショート動画の統計
+			const shortVideos = data.filter(
+				(row) => row[1] === hashtag && row[3] === "ショート",
+			);
+
+			// ショート動画の統計を常に出力（動画がなくても0で出力）
+			const shortChannelCount = new Set(shortVideos.map((row) => row[6])).size;
+			const shortTotalViews = shortVideos.reduce(
+				(sum, row) => sum + (Number.parseInt(row[10] || "0", 10) || 0),
+				0,
+			);
+
+			statsSheet.appendRow([
+				todayStr,
+				hashtag,
+				"ショート",
+				shortVideos.length,
+				shortChannelCount,
+				shortTotalViews,
+			]);
+		}
+
+		// ソート（日付の降順、ハッシュタグ、動画タイプ）
+		statsSheet.getRange(2, 1, statsSheet.getLastRow() - 1, 6).sort([
+			{ column: 1, ascending: false },
+			{ column: 2, ascending: true },
+			{ column: 3, ascending: true },
+		]);
+
+		Logger.log("日次統計を更新しました。");
+	} catch (error) {
+		const errorMessage = error instanceof Error ? error.message : String(error);
+		Logger.log(`Error in updateDailyStats: ${errorMessage}`);
+		if (error instanceof Error && error.stack) {
+			Logger.log(error.stack);
+		}
 	}
 }
 
