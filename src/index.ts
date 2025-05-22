@@ -515,7 +515,7 @@ function fetchVideoAnalytics(
 			"averageViewDuration",
 			"views",
 			"impressions",
-			"impressionsClickThroughRate",
+			"ctr",
 			"subscribersGained",
 		].join(",");
 
