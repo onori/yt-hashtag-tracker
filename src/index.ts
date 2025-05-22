@@ -18,7 +18,7 @@ const SHEET_NAME = "YouTubeハッシュタグ分析";
 const TARGET_HASHTAGS = ["#安野たかひろ", "#チームみらい"];
 
 // メインの処理を実行する関数
-function main() {
+async function main() {
 	try {
 		// スプレッドシートを取得または作成
 		const spreadsheet = getOrCreateSpreadsheet();
@@ -29,7 +29,7 @@ function main() {
 
 		// 各ハッシュタグに対して検索を実行
 		for (const hashtag of TARGET_HASHTAGS) {
-			searchVideosByHashtag(hashtag, sheet);
+			await searchVideosByHashtag(hashtag, sheet);
 		}
 
 		// 重複を削除して最新のデータを残す
@@ -91,7 +91,10 @@ function setupSheetHeaders(sheet: GoogleAppsScript.Spreadsheet.Sheet) {
 		"チャンネル登録者数",
 		"動画公開日",
 		"動画の説明",
+		"インプレッション数",
+		"インプレッションクリック率",
 		"視聴回数",
+		"平均再生率",
 		"いいね数",
 		"低評価数",
 		"コメント数",
@@ -114,7 +117,7 @@ function setupSheetHeaders(sheet: GoogleAppsScript.Spreadsheet.Sheet) {
 }
 
 // ハッシュタグで動画を検索する関数
-function searchVideosByHashtag(
+async function searchVideosByHashtag(
 	hashtag: string,
 	sheet: GoogleAppsScript.Spreadsheet.Sheet,
 ) {
@@ -268,6 +271,31 @@ function searchVideosByHashtag(
 				video.snippet.title?.toLowerCase().includes("shorts") ||
 				video.snippet.description?.toLowerCase().includes("shorts");
 
+			// 動画の分析データを取得
+			let analyticsData = null;
+			try {
+				analyticsData = await fetchVideoAnalytics(videoId, channelId);
+			} catch (error) {
+				const errorMessage =
+					error instanceof Error ? error.message : String(error);
+				Logger.log(
+					`Error fetching analytics for video ${videoId}: ${errorMessage}`,
+				);
+			}
+
+			// チャンネル登録者数の履歴を更新
+			try {
+				updateSubscriberHistory(
+					SpreadsheetApp.openById(SPREADSHEET_ID),
+					channelId,
+					Number.parseInt(channelInfo.subscriberCount, 10) || 0,
+				);
+			} catch (error) {
+				const errorMessage =
+					error instanceof Error ? error.message : String(error);
+				Logger.log(`Error updating subscriber history: ${errorMessage}`);
+			}
+
 			newRows.push([
 				now, // 取得日時
 				hashtag, // ハッシュタグ
@@ -279,7 +307,14 @@ function searchVideosByHashtag(
 				Number.parseInt(channelInfo.subscriberCount, 10) || 0, // チャンネル登録者数
 				new Date(publishedAt), // 動画公開日
 				video.snippet.description || "", // 動画の説明
+				analyticsData?.impressions || 0, // インプレッション数
+				analyticsData?.impressionsClickThroughRate
+					? Number(analyticsData.impressionsClickThroughRate.toFixed(2))
+					: 0, // インプレッションクリック率 (%)
 				Number.parseInt(stats.viewCount || "0", 10), // 視聴回数
+				analyticsData?.averageViewPercentage
+					? Number(analyticsData.averageViewPercentage.toFixed(2))
+					: 0, // 平均再生率 (%)
 				Number.parseInt(stats.likeCount || "0", 10), // いいね数
 				Number.parseInt(stats.dislikeCount || "0", 10), // 低評価数
 				Number.parseInt(stats.commentCount || "0", 10), // コメント数
@@ -455,6 +490,147 @@ function updateDailyStats(
 			Logger.log(error.stack);
 		}
 	}
+}
+
+// 動画の分析データを取得する関数
+function fetchVideoAnalytics(
+	videoId: string,
+	channelId: string,
+): {
+	averageViewPercentage?: number;
+	averageViewDuration?: string;
+	impressions?: number;
+	impressionsClickThroughRate?: number;
+	subscribersGained?: number;
+	retentionRate: number[];
+} | null {
+	try {
+		const now = new Date();
+		const thirtyDaysAgo = new Date();
+		thirtyDaysAgo.setDate(now.getDate() - 30);
+
+		// 平均再生率と視聴時間を取得
+		const metrics = [
+			"averageViewPercentage",
+			"averageViewDuration",
+			"views",
+			"impressions",
+			"impressionsClickThroughRate",
+			"subscribersGained",
+		].join(",");
+
+		// YouTube Analytics APIを使用してデータを取得
+		if (!YouTubeAnalytics?.Reports) {
+			Logger.log("YouTube Analytics API is not available");
+			return null;
+		}
+
+		// メトリクスデータを取得
+		const response = YouTubeAnalytics.Reports.query({
+			ids: `channel==${channelId}`,
+			startDate: thirtyDaysAgo.toISOString().split("T")[0],
+			endDate: now.toISOString().split("T")[0],
+			metrics: metrics,
+			dimensions: "video",
+			filters: `video==${videoId}`,
+		});
+
+		if (!response.rows || response.rows.length === 0) {
+			Logger.log(`No analytics data found for video: ${videoId}`);
+			return null;
+		}
+
+		// 視聴維持率を取得
+		const retentionResponse = YouTubeAnalytics.Reports.query({
+			ids: `channel==${channelId}`,
+			startDate: thirtyDaysAgo.toISOString().split("T")[0],
+			endDate: now.toISOString().split("T")[0],
+			metrics: "audienceWatchRatio",
+			dimensions: "elapsedVideoTimeRatio",
+			filters: `video==${videoId}`,
+			sort: "elapsedVideoTimeRatio",
+		});
+
+		const retentionRate: number[] = [];
+		if (retentionResponse.rows) {
+			for (const row of retentionResponse.rows) {
+				const value = row[1];
+				if (value !== null && value !== undefined) {
+					// Ensure the value is a number before multiplying
+					const numericValue =
+						typeof value === "number"
+							? value
+							: Number.parseFloat(value as string);
+					if (!Number.isNaN(numericValue)) {
+						retentionRate.push(numericValue * 100); // パーセンテージに変換
+					}
+				}
+			}
+		}
+
+		// データを整形
+		const row = response.rows[0];
+		const metricsIndex: Record<string, number> = {};
+
+		if (response.columnHeaders) {
+			response.columnHeaders.forEach(
+				(header: { name?: string }, index: number) => {
+					if (header.name) {
+						metricsIndex[header.name] = index;
+					}
+				},
+			);
+		}
+
+		const getMetric = <T>(name: string): T | undefined => {
+			const index = metricsIndex[name];
+			return index !== undefined ? (row[index] as T) : undefined;
+		};
+
+		return {
+			averageViewPercentage: getMetric<number>("averageViewPercentage"),
+			averageViewDuration: getMetric<string>("averageViewDuration"),
+			impressions: getMetric<number>("impressions"),
+			impressionsClickThroughRate: getMetric<number>(
+				"impressionsClickThroughRate",
+			),
+			subscribersGained: getMetric<number>("subscribersGained"),
+			retentionRate,
+		};
+	} catch (error) {
+		const errorMessage = error instanceof Error ? error.message : String(error);
+		Logger.log(
+			`Error fetching analytics for video ${videoId}: ${errorMessage}`,
+		);
+		return null;
+	}
+}
+
+// チャンネル登録者数の履歴を記録する関数
+function updateSubscriberHistory(
+	spreadsheet: GoogleAppsScript.Spreadsheet.Spreadsheet,
+	channelId: string,
+	subscriberCount: number,
+) {
+	const SHEET_NAME = "チャンネル登録者数履歴";
+	let sheet = spreadsheet.getSheetByName(SHEET_NAME);
+
+	if (!sheet) {
+		sheet = spreadsheet.insertSheet(SHEET_NAME);
+		sheet.appendRow(["日付", "チャンネルID", "登録者数"]);
+	}
+
+	// ヘッダーが既にあるか確認
+	if (sheet.getLastRow() === 0) {
+		sheet.appendRow(["日付", "チャンネルID", "登録者数"]);
+	}
+
+	const now = new Date();
+	sheet.appendRow([now, channelId, subscriberCount]);
+
+	// データを日付の降順でソート
+	const range = sheet.getDataRange();
+	range.sort([{ column: 1, ascending: false }]);
 }
 
 // グローバルスコープに型をマージ
