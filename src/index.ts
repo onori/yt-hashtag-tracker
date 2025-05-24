@@ -36,7 +36,10 @@ async function main() {
 		removeDuplicateVideos(sheet);
 
 		// 日次統計を更新
-		updateDailyStats(spreadsheet);
+		// updateDailyStats();
+
+		// チャンネル登録者数の履歴を更新
+		// updateSubscriberHistory();
 
 		Logger.log("処理が完了しました。");
 	} catch (error) {
@@ -91,14 +94,9 @@ function setupSheetHeaders(sheet: GoogleAppsScript.Spreadsheet.Sheet) {
 		"チャンネル登録者数",
 		"動画公開日",
 		"動画の説明",
-		"インプレッション数",
-		"インプレッションクリック率",
 		"視聴回数",
-		"平均再生率",
 		"いいね数",
-		"低評価数",
 		"コメント数",
-		"動画URL",
 	];
 
 	// ヘッダーが既に設定されているかチェック
@@ -271,31 +269,6 @@ async function searchVideosByHashtag(
 				video.snippet.title?.toLowerCase().includes("shorts") ||
 				video.snippet.description?.toLowerCase().includes("shorts");
 
-			// 動画の分析データを取得
-			let analyticsData = null;
-			try {
-				analyticsData = await fetchVideoAnalytics(videoId, channelId);
-			} catch (error) {
-				const errorMessage =
-					error instanceof Error ? error.message : String(error);
-				Logger.log(
-					`Error fetching analytics for video ${videoId}: ${errorMessage}`,
-				);
-			}
-
-			// チャンネル登録者数の履歴を更新
-			try {
-				updateSubscriberHistory(
-					SpreadsheetApp.openById(SPREADSHEET_ID),
-					channelId,
-					Number.parseInt(channelInfo.subscriberCount, 10) || 0,
-				);
-			} catch (error) {
-				const errorMessage =
-					error instanceof Error ? error.message : String(error);
-				Logger.log(`Error updating subscriber history: ${errorMessage}`);
-			}
-
 			newRows.push([
 				now, // 取得日時
 				hashtag, // ハッシュタグ
@@ -307,18 +280,9 @@ async function searchVideosByHashtag(
 				Number.parseInt(channelInfo.subscriberCount, 10) || 0, // チャンネル登録者数
 				new Date(publishedAt), // 動画公開日
 				video.snippet.description || "", // 動画の説明
-				analyticsData?.impressions || 0, // インプレッション数
-				analyticsData?.impressionsClickThroughRate
-					? Number(analyticsData.impressionsClickThroughRate.toFixed(2))
-					: 0, // インプレッションクリック率 (%)
 				Number.parseInt(stats.viewCount || "0", 10), // 視聴回数
-				analyticsData?.averageViewPercentage
-					? Number(analyticsData.averageViewPercentage.toFixed(2))
-					: 0, // 平均再生率 (%)
 				Number.parseInt(stats.likeCount || "0", 10), // いいね数
-				Number.parseInt(stats.dislikeCount || "0", 10), // 低評価数
 				Number.parseInt(stats.commentCount || "0", 10), // コメント数
-				`=HYPERLINK("https://www.youtube.com/watch?v=${videoId}", "動画を見る")`, // 動画URL（ハイパーリンク）
 			]);
 		}
 
@@ -364,39 +328,49 @@ function removeDuplicateVideos(sheet: GoogleAppsScript.Spreadsheet.Sheet) {
 	const lastRow = sheet.getLastRow();
 	if (lastRow <= 1) return; // ヘッダーのみの場合はスキップ
 
-	const dataRange = sheet.getRange(2, 1, lastRow - 1, 14); // A:N列
+	// ヘッダーを除く全データを取得
+	const dataRange = sheet.getDataRange();
 	const data = dataRange.getValues();
+	const headers = data[0]; // ヘッダー行を取得
+
+	// データ部分のみを処理（ヘッダーを除外）
+	const rows = data.slice(1);
+
+	// 日付で降順にソート（0列目が日付）
+	rows.sort((a, b) => new Date(b[0]).getTime() - new Date(a[0]).getTime());
 
 	// 動画IDをキーとして、最新の行を保持
 	const videoMap = new Map();
 
-	data.forEach((row, index) => {
+	for (const row of rows) {
 		const videoId = row[2]; // C列: 動画ID
-		videoMap.set(videoId, row);
-	});
+		if (!videoMap.has(videoId)) {
+			videoMap.set(videoId, row);
+		}
+	}
 
-	// 重複を削除したデータを作成
-	const uniqueData = Array.from(videoMap.values());
+	// 重複を削除したデータを作成（ヘッダーを先頭に追加）
+	const uniqueData = [headers, ...Array.from(videoMap.values())];
 
-	// データをクリアしてから再書き込み
-	dataRange.clearContent();
+	// シートをクリアしてから再書き込み
+	sheet.clearContents();
 	if (uniqueData.length > 0) {
 		sheet
-			.getRange(2, 1, uniqueData.length, uniqueData[0].length)
+			.getRange(1, 1, uniqueData.length, uniqueData[0].length)
 			.setValues(uniqueData);
 	}
 
-	const duplicateCount = data.length - uniqueData.length;
+	const duplicateCount = rows.length - videoMap.size;
 	if (duplicateCount > 0) {
 		Logger.log(`重複する動画を ${duplicateCount} 件削除しました。`);
 	}
 }
 
 // 日次統計を更新する関数
-function updateDailyStats(
-	spreadsheet: GoogleAppsScript.Spreadsheet.Spreadsheet,
-) {
+function updateDailyStats() {
 	try {
+		const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+
 		const STATS_SHEET_NAME = "日次統計";
 		const statsSheet = getOrCreateSheet(spreadsheet, STATS_SHEET_NAME);
 
@@ -492,145 +466,141 @@ function updateDailyStats(
 	}
 }
 
-// 動画の分析データを取得する関数
-function fetchVideoAnalytics(
-	videoId: string,
-	channelId: string,
-): {
-	averageViewPercentage?: number;
-	averageViewDuration?: string;
-	impressions?: number;
-	impressionsClickThroughRate?: number;
-	subscribersGained?: number;
-	retentionRate: number[];
-} | null {
-	try {
-		const now = new Date();
-		const thirtyDaysAgo = new Date();
-		thirtyDaysAgo.setDate(now.getDate() - 30);
-
-		// 平均再生率と視聴時間を取得
-		const metrics = [
-			"averageViewPercentage",
-			"averageViewDuration",
-			"views",
-			"impressions",
-			"ctr",
-			"subscribersGained",
-		].join(",");
-
-		// YouTube Analytics APIを使用してデータを取得
-		if (!YouTubeAnalytics?.Reports) {
-			Logger.log("YouTube Analytics API is not available");
-			return null;
-		}
-
-		// メトリクスデータを取得
-		const response = YouTubeAnalytics.Reports.query({
-			ids: `channel==${channelId}`,
-			startDate: thirtyDaysAgo.toISOString().split("T")[0],
-			endDate: now.toISOString().split("T")[0],
-			metrics: metrics,
-			dimensions: "video",
-			filters: `video==${videoId}`,
-		});
-
-		if (!response.rows || response.rows.length === 0) {
-			Logger.log(`No analytics data found for video: ${videoId}`);
-			return null;
-		}
-
-		// 視聴維持率を取得
-		const retentionResponse = YouTubeAnalytics.Reports.query({
-			ids: `channel==${channelId}`,
-			startDate: thirtyDaysAgo.toISOString().split("T")[0],
-			endDate: now.toISOString().split("T")[0],
-			metrics: "audienceWatchRatio",
-			dimensions: "elapsedVideoTimeRatio",
-			filters: `video==${videoId}`,
-			sort: "elapsedVideoTimeRatio",
-		});
-
-		const retentionRate: number[] = [];
-		if (retentionResponse.rows) {
-			for (const row of retentionResponse.rows) {
-				const value = row[1];
-				if (value !== null && value !== undefined) {
-					// Ensure the value is a number before multiplying
-					const numericValue =
-						typeof value === "number"
-							? value
-							: Number.parseFloat(value as string);
-					if (!Number.isNaN(numericValue)) {
-						retentionRate.push(numericValue * 100); // パーセンテージに変換
-					}
-				}
-			}
-		}
-
-		// データを整形
-		const row = response.rows[0];
-		const metricsIndex: Record<string, number> = {};
-
-		if (response.columnHeaders) {
-			response.columnHeaders.forEach(
-				(header: { name?: string }, index: number) => {
-					if (header.name) {
-						metricsIndex[header.name] = index;
-					}
-				},
-			);
-		}
-
-		const getMetric = <T>(name: string): T | undefined => {
-			const index = metricsIndex[name];
-			return index !== undefined ? (row[index] as T) : undefined;
-		};
-
-		return {
-			averageViewPercentage: getMetric<number>("averageViewPercentage"),
-			averageViewDuration: getMetric<string>("averageViewDuration"),
-			impressions: getMetric<number>("impressions"),
-			impressionsClickThroughRate: getMetric<number>(
-				"impressionsClickThroughRate",
-			),
-			subscribersGained: getMetric<number>("subscribersGained"),
-			retentionRate,
-		};
-	} catch (error) {
-		const errorMessage = error instanceof Error ? error.message : String(error);
-		Logger.log(
-			`Error fetching analytics for video ${videoId}: ${errorMessage}`,
-		);
-		return null;
+// ヘッダー名から列番号を取得する関数
+function getColumnIndexByHeader(
+	sheet: GoogleAppsScript.Spreadsheet.Sheet,
+	headerText: string,
+): number {
+	const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+	const index = headers.findIndex((header) => header === headerText);
+	if (index === -1) {
+		throw new Error(`ヘッダー "${headerText}" が見つかりませんでした`);
 	}
+	return index;
 }
 
 // チャンネル登録者数の履歴を記録する関数
-function updateSubscriberHistory(
-	spreadsheet: GoogleAppsScript.Spreadsheet.Spreadsheet,
-	channelId: string,
-	subscriberCount: number,
-) {
+// 毎日実行され、すべてのユニークなチャンネルの登録者数を記録する
+function updateSubscriberHistory() {
 	const SHEET_NAME = "チャンネル登録者数履歴";
+	const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
 	let sheet = spreadsheet.getSheetByName(SHEET_NAME);
 
+	// シートが存在しない場合は作成
 	if (!sheet) {
 		sheet = spreadsheet.insertSheet(SHEET_NAME);
-		sheet.appendRow(["日付", "チャンネルID", "登録者数"]);
+		sheet.appendRow([
+			"日付",
+			"チャンネルタイトル",
+			"チャンネル登録者数",
+			"視聴回数",
+		]);
+	} else if (sheet.getLastRow() === 0) {
+		// シートが空の場合はヘッダーを追加
+		sheet.appendRow([
+			"日付",
+			"チャンネルタイトル",
+			"チャンネル登録者数",
+			"視聴回数",
+		]);
 	}
 
-	// ヘッダーが既にあるか確認
-	if (sheet.getLastRow() === 0) {
-		sheet.appendRow(["日付", "チャンネルID", "登録者数"]);
+	// メインのシートからデータを取得
+	const mainSheet = spreadsheet.getSheetByName("YouTubeハッシュタグ分析");
+	if (!mainSheet) {
+		Logger.log("メインのシートが見つかりませんでした");
+		return;
 	}
 
+	// ヘッダーから列番号を取得
+	const channelTitleCol = getColumnIndexByHeader(mainSheet, "チャンネル名");
+	const subscriberCountCol = getColumnIndexByHeader(
+		mainSheet,
+		"チャンネル登録者数",
+	);
+	const viewCountCol = getColumnIndexByHeader(mainSheet, "視聴回数");
+
+	// データを取得（ヘッダー行を除く）
+	const data = mainSheet
+		.getRange(2, 1, mainSheet.getLastRow() - 1, mainSheet.getLastColumn())
+		.getValues();
+
+	// チャンネルごとの最新の登録者数と視聴回数の合計を保持するマップ
+	const channelMap = new Map<
+		string,
+		{ title: string; count: number; viewCount: number }
+	>();
+
+	// データを処理して、各チャンネルの最新の登録者数を取得
+	for (const row of data) {
+		const channelTitle = row[channelTitleCol];
+		const subscriberCount = row[subscriberCountCol];
+		const viewCount = row[viewCountCol];
+
+		if (
+			channelTitle &&
+			typeof subscriberCount === "number" &&
+			!Number.isNaN(subscriberCount)
+		) {
+			const currentViewCount =
+				typeof viewCount === "number" && !Number.isNaN(viewCount)
+					? viewCount
+					: 0;
+
+			const existing = channelMap.get(channelTitle);
+			if (existing) {
+				// 既存のチャンネルの場合、視聴回数を加算
+				// 登録者数は最新の値で更新
+				if (subscriberCount > existing.count) {
+					existing.count = subscriberCount;
+				}
+				existing.viewCount += currentViewCount;
+			} else {
+				// 新しいチャンネルの場合、新規に追加
+				channelMap.set(channelTitle, {
+					title: channelTitle,
+					count: subscriberCount,
+					viewCount: currentViewCount,
+				});
+			}
+		}
+	}
+
+	// 現在の日時を取得
 	const now = new Date();
-	sheet.appendRow([now, channelId, subscriberCount]);
 
-	// データを日付の降順でソート
-	const range = sheet.getDataRange();
-	range.sort([{ column: 1, ascending: false }]);
+	// マップのデータを行に変換
+	const rows = Array.from(channelMap.entries()).map(([_, channel]) => [
+		now, // 日付
+		channel.title, // チャンネルタイトル
+		Math.floor(channel.count), // 登録者数（整数に丸める）
+		Math.floor(channel.viewCount), // 視聴回数の合計（整数に丸める）
+	]);
+
+	// データをシートに追加
+	if (rows.length > 0) {
+		sheet
+			.getRange(sheet.getLastRow() + 1, 1, rows.length, rows[0].length)
+			.setValues(rows);
+
+		// データを日付の降順、チャンネルタイトルの昇順でソート
+		const range = sheet.getDataRange();
+		range.sort([
+			{ column: 1, ascending: false }, // 日付（新しい順）
+			{ column: 2, ascending: true }, // チャンネルタイトル（昇順）
+		]);
+
+		// ヘッダーを太字に
+		const headerRange = sheet.getRange(1, 1, 1, 3);
+		headerRange.setFontWeight("bold");
+
+		// 列幅を自動調整
+		sheet.autoResizeColumns(1, 4);
+
+		Logger.log(`${rows.length}件のチャンネル登録者数を記録しました`);
+	} else {
+		Logger.log("記録するデータがありませんでした");
+	}
 }
 
 // グローバルスコープに型をマージ
