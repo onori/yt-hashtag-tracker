@@ -11,19 +11,19 @@ import type {
 
 // スプレッドシートに書き込む行データの型定義
 type FormattedVideoData = [
-  Date,      // 取得日時
-  string,    // ハッシュタグ
-  string,    // 動画ID
-  string,    // 動画カテゴリ ("ショート" | "通常")
-  string,    // 動画タイトル
-  string,    // 動画URL
-  string,    // チャンネル名
-  number,    // チャンネル登録者数
-  Date,      // 動画公開日
-  string,    // 動画の説明
-  number,    // 視聴回数
-  number,    // いいね数
-  number     // コメント数
+	Date, // 取得日時
+	string, // ハッシュタグ
+	string, // 動画ID
+	string, // 動画カテゴリ ("ショート" | "通常")
+	string, // 動画タイトル
+	string, // 動画URL
+	string, // チャンネル名
+	number, // チャンネル登録者数
+	Date, // 動画公開日
+	string, // 動画の説明
+	number, // 視聴回数
+	number, // いいね数
+	number, // コメント数
 ];
 
 // スプレッドシートの設定
@@ -93,117 +93,139 @@ function getOrCreateSheet(
 }
 
 // YouTube APIから動画データを取得し整形する共通関数
-async function fetchYouTubeVideoData(hashtag: string, publishedAfterISO: string): Promise<FormattedVideoData[]> {
-  Logger.log(`fetchYouTubeVideoData: ハッシュタグ「${hashtag}」で動画を検索中 (公開日以降: ${publishedAfterISO})`);
-  const newRows: FormattedVideoData[] = [];
-  const fetchTime = new Date(); // 取得日時を一括で設定するため最初に取得
+async function fetchYouTubeVideoData(
+	hashtag: string,
+	publishedAfterISO: string,
+): Promise<FormattedVideoData[]> {
+	Logger.log(
+		`fetchYouTubeVideoData: ハッシュタグ「${hashtag}」で動画を検索中 (公開日以降: ${publishedAfterISO})`,
+	);
+	const newRows: FormattedVideoData[] = [];
+	const fetchTime = new Date(); // 取得日時を一括で設定するため最初に取得
 
-  try {
-    // YouTube Data APIを使用して動画を検索
-    const searchResponse = YouTube?.Search?.list("id,snippet", {
-      q: hashtag,
-      type: "video",
-      part: "snippet",
-      maxResults: 50,
-      order: "date",
-      publishedAfter: publishedAfterISO,
-    });
+	try {
+		// YouTube Data APIを使用して動画を検索
+		const searchResponse = YouTube?.Search?.list("id,snippet", {
+			q: hashtag,
+			type: "video",
+			part: "snippet",
+			maxResults: 50,
+			order: "date",
+			publishedAfter: publishedAfterISO,
+		});
 
-    if (!searchResponse?.items || searchResponse.items.length === 0) {
-      Logger.log(`fetchYouTubeVideoData: ハッシュタグ「${hashtag}」の動画は見つかりませんでした。`);
-      return newRows;
-    }
+		if (!searchResponse?.items || searchResponse.items.length === 0) {
+			Logger.log(
+				`fetchYouTubeVideoData: ハッシュタグ「${hashtag}」の動画は見つかりませんでした。`,
+			);
+			return newRows;
+		}
 
-    const videoIds = searchResponse.items
-      .map((item) => item.id?.videoId)
-      .filter((id): id is string => !!id);
+		const videoIds = searchResponse.items
+			.map((item) => item.id?.videoId)
+			.filter((id): id is string => !!id);
 
-    if (videoIds.length === 0) {
-      Logger.log(`fetchYouTubeVideoData: 有効な動画IDが見つかりませんでした: ${hashtag}`);
-      return newRows;
-    }
+		if (videoIds.length === 0) {
+			Logger.log(
+				`fetchYouTubeVideoData: 有効な動画IDが見つかりませんでした: ${hashtag}`,
+			);
+			return newRows;
+		}
 
-    const videosResponse = YouTube?.Videos?.list("snippet,statistics", {
-      id: videoIds.join(","),
-      part: "snippet,statistics",
-    });
+		const videosResponse = YouTube?.Videos?.list("snippet,statistics", {
+			id: videoIds.join(","),
+			part: "snippet,statistics",
+		});
 
-    if (!videosResponse?.items || videosResponse.items.length === 0) {
-      Logger.log("fetchYouTubeVideoData: 動画の詳細情報を取得できませんでした。");
-      return newRows;
-    }
+		if (!videosResponse?.items || videosResponse.items.length === 0) {
+			Logger.log(
+				"fetchYouTubeVideoData: 動画の詳細情報を取得できませんでした。",
+			);
+			return newRows;
+		}
 
-    const channelIds = [
-      ...new Set(
-        videosResponse.items
-          .map((video) => video.snippet?.channelId)
-          .filter((id): id is string => !!id),
-      ),
-    ];
+		const channelIds = [
+			...new Set(
+				videosResponse.items
+					.map((video) => video.snippet?.channelId)
+					.filter((id): id is string => !!id),
+			),
+		];
 
-    const channelInfoMap = new Map<string, { title: string; subscriberCount: string }>();
-    if (channelIds.length > 0) {
-      const channelsResponse = YouTube?.Channels?.list("snippet,statistics", {
-        id: channelIds.join(","),
-        part: "snippet,statistics",
-      });
-      if (channelsResponse?.items) {
-        for (const channel of channelsResponse.items) {
-          if (channel.id && channel.snippet) {
-            channelInfoMap.set(channel.id, {
-              title: channel.snippet.title || "不明",
-              subscriberCount: channel.statistics?.subscriberCount || "0",
-            });
-          }
-        }
-      }
-    }
+		const channelInfoMap = new Map<
+			string,
+			{ title: string; subscriberCount: string }
+		>();
+		if (channelIds.length > 0) {
+			const channelsResponse = YouTube?.Channels?.list("snippet,statistics", {
+				id: channelIds.join(","),
+				part: "snippet,statistics",
+			});
+			if (channelsResponse?.items) {
+				for (const channel of channelsResponse.items) {
+					if (channel.id && channel.snippet) {
+						channelInfoMap.set(channel.id, {
+							title: channel.snippet.title || "不明",
+							subscriberCount: channel.statistics?.subscriberCount || "0",
+						});
+					}
+				}
+			}
+		}
 
-    for (const video of videosResponse.items) {
-      if (!video.id || !video.snippet) continue;
+		for (const video of videosResponse.items) {
+			if (!video.id || !video.snippet) continue;
 
-      const channelId = video.snippet.channelId;
-      const channelInfo = channelId ? channelInfoMap.get(channelId) : null;
+			const channelId = video.snippet.channelId;
+			const channelInfo = channelId ? channelInfoMap.get(channelId) : null;
 
-      const videoId = video.id;
-      const stats = video.statistics || { viewCount: "0", likeCount: "0", commentCount: "0" };
-      const publishedAt = video.snippet.publishedAt;
+			const videoId = video.id;
+			const stats = video.statistics || {
+				viewCount: "0",
+				likeCount: "0",
+				commentCount: "0",
+			};
+			const publishedAt = video.snippet.publishedAt;
 
-      if (!publishedAt) {
-        Logger.log(`fetchYouTubeVideoData: 公開日がないためスキップ: ${videoId}`);
-        continue;
-      }
+			if (!publishedAt) {
+				Logger.log(
+					`fetchYouTubeVideoData: 公開日がないためスキップ: ${videoId}`,
+				);
+				continue;
+			}
 
-      const isShort =
-        video.snippet.title?.includes("#shorts") ||
-        video.snippet.description?.includes("#shorts") ||
-        video.snippet.title?.toLowerCase().includes("shorts") ||
-        video.snippet.description?.toLowerCase().includes("shorts");
+			const isShort =
+				video.snippet.title?.includes("#shorts") ||
+				video.snippet.description?.includes("#shorts") ||
+				video.snippet.title?.toLowerCase().includes("shorts") ||
+				video.snippet.description?.toLowerCase().includes("shorts");
 
-      newRows.push([
-        fetchTime, // 取得日時
-        hashtag, // ハッシュタグ
-        videoId, // 動画ID
-        isShort ? "ショート" : "通常", // 動画カテゴリ
-        video.snippet.title || "タイトルなし", // 動画タイトル
-        `https://www.youtube.com/watch?v=${videoId}`, // 動画URL
-        channelInfo?.title || "不明", // チャンネル名
-        Number.parseInt(channelInfo?.subscriberCount || "0", 10) || 0, // チャンネル登録者数
-        new Date(publishedAt), // 動画公開日
-        video.snippet.description || "", // 動画の説明
-        Number.parseInt(stats.viewCount || "0", 10) || 0, // 視聴回数
-        Number.parseInt(stats.likeCount || "0", 10) || 0, // いいね数
-        Number.parseInt(stats.commentCount || "0", 10) || 0, // コメント数
-      ]);
-    }
-  } catch (error: unknown) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    Logger.log(`fetchYouTubeVideoData: エラーが発生しました (ハッシュタグ: ${hashtag}): ${errorMessage}`);
-    if (error instanceof Error && error.stack) {
-      Logger.log(error.stack);
-    }
-  }
-  return newRows;
+			newRows.push([
+				fetchTime, // 取得日時
+				hashtag, // ハッシュタグ
+				videoId, // 動画ID
+				isShort ? "ショート" : "通常", // 動画カテゴリ
+				video.snippet.title || "タイトルなし", // 動画タイトル
+				`https://www.youtube.com/watch?v=${videoId}`, // 動画URL
+				channelInfo?.title || "不明", // チャンネル名
+				Number.parseInt(channelInfo?.subscriberCount || "0", 10) || 0, // チャンネル登録者数
+				new Date(publishedAt), // 動画公開日
+				video.snippet.description || "", // 動画の説明
+				Number.parseInt(stats.viewCount || "0", 10) || 0, // 視聴回数
+				Number.parseInt(stats.likeCount || "0", 10) || 0, // いいね数
+				Number.parseInt(stats.commentCount || "0", 10) || 0, // コメント数
+			]);
+		}
+	} catch (error: unknown) {
+		const errorMessage = error instanceof Error ? error.message : String(error);
+		Logger.log(
+			`fetchYouTubeVideoData: エラーが発生しました (ハッシュタグ: ${hashtag}): ${errorMessage}`,
+		);
+		if (error instanceof Error && error.stack) {
+			Logger.log(error.stack);
+		}
+	}
+	return newRows;
 }
 
 // シートのヘッダーを設定する関数
@@ -244,29 +266,37 @@ async function searchVideosByHashtag(
 	hashtag: string,
 	sheet: GoogleAppsScript.Spreadsheet.Sheet,
 ) {
-	Logger.log(`searchVideosByHashtag: ハッシュタグ「${hashtag}」で動画を検索中...`);
+	Logger.log(
+		`searchVideosByHashtag: ハッシュタグ「${hashtag}」で動画を検索中...`,
+	);
 	try {
-    const publishedAfterISO = new Date(
-      Date.now() - 365 * 24 * 60 * 60 * 1000,
-    ).toISOString();
+		const publishedAfterISO = new Date(
+			Date.now() - 365 * 24 * 60 * 60 * 1000,
+		).toISOString();
 
-    const newRows = await fetchYouTubeVideoData(hashtag, publishedAfterISO);
+		const newRows = await fetchYouTubeVideoData(hashtag, publishedAfterISO);
 
-    if (newRows.length > 0) {
-      const lastRow = sheet.getLastRow();
-      sheet.getRange(lastRow + 1, 1, newRows.length, newRows[0].length).setValues(newRows);
-      Logger.log(
-        `searchVideosByHashtag: ハッシュタグ「${hashtag}」の動画を ${newRows.length} 件追加しました。`,
-      );
-    } else {
-      Logger.log(`searchVideosByHashtag: ハッシュタグ「${hashtag}」で追加する新しい動画はありませんでした。`);
-    }
+		if (newRows.length > 0) {
+			const lastRow = sheet.getLastRow();
+			sheet
+				.getRange(lastRow + 1, 1, newRows.length, newRows[0].length)
+				.setValues(newRows);
+			Logger.log(
+				`searchVideosByHashtag: ハッシュタグ「${hashtag}」の動画を ${newRows.length} 件追加しました。`,
+			);
+		} else {
+			Logger.log(
+				`searchVideosByHashtag: ハッシュタグ「${hashtag}」で追加する新しい動画はありませんでした。`,
+			);
+		}
 	} catch (error: unknown) {
 		const errorMessage = error instanceof Error ? error.message : String(error);
-		Logger.log(`searchVideosByHashtag: エラーが発生しました (ハッシュタグ: ${hashtag}): ${errorMessage}`);
-    if (error instanceof Error && error.stack) {
-      Logger.log(error.stack);
-    }
+		Logger.log(
+			`searchVideosByHashtag: エラーが発生しました (ハッシュタグ: ${hashtag}): ${errorMessage}`,
+		);
+		if (error instanceof Error && error.stack) {
+			Logger.log(error.stack);
+		}
 	}
 }
 
@@ -544,144 +574,159 @@ function updateSubscriberHistory() {
 		// 列幅を自動調整
 		sheet.autoResizeColumns(1, 4);
 
-    Logger.log(`${rows.length}件のチャンネル登録者数を記録しました`);
-  }
+		Logger.log(`${rows.length}件のチャンネル登録者数を記録しました`);
+	}
 }
 
 // ハッシュタグで動画を検索してシートに追加する関数
-async function searchAndAppendVideos(hashtag: string, sheet: GoogleAppsScript.Spreadsheet.Sheet) {
-  Logger.log(`searchAndAppendVideos: ハッシュタグ「${hashtag}」で動画を検索中...`);
-  try {
-    const now = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()); // 今日の0時0分0秒
-    const publishedAfterISO = today.toISOString();
+async function searchAndAppendVideos(
+	hashtag: string,
+	sheet: GoogleAppsScript.Spreadsheet.Sheet,
+) {
+	Logger.log(
+		`searchAndAppendVideos: ハッシュタグ「${hashtag}」で動画を検索中...`,
+	);
+	try {
+		const now = new Date();
+		const publishedAfterISO = new Date(
+			Date.now() - 365 * 24 * 60 * 60 * 1000,
+		).toISOString();
 
-    const newRows = await fetchYouTubeVideoData(hashtag, publishedAfterISO);
+		const newRows = await fetchYouTubeVideoData(hashtag, publishedAfterISO);
 
-    if (newRows.length > 0) {
-      const lastRow = sheet.getLastRow();
-      sheet.getRange(lastRow + 1, 1, newRows.length, newRows[0].length).setValues(newRows);
-      Logger.log(
-        `searchAndAppendVideos: ハッシュタグ「${hashtag}」の動画を ${newRows.length} 件追加しました。`,
-      );
-    } else {
-      Logger.log(`searchAndAppendVideos: ハッシュタグ「${hashtag}」で追加する新しい動画はありませんでした。`);
-    }
-  } catch (error) {
-    Logger.log(`searchAndAppendVideos: エラーが発生しました (ハッシュタグ: ${hashtag}): ${error}`);
-    if (error instanceof Error && error.stack) {
-      Logger.log(error.stack);
-    }
-  }
+		if (newRows.length > 0) {
+			const lastRow = sheet.getLastRow();
+			sheet
+				.getRange(lastRow + 1, 1, newRows.length, newRows[0].length)
+				.setValues(newRows);
+			Logger.log(
+				`searchAndAppendVideos: ハッシュタグ「${hashtag}」の動画を ${newRows.length} 件追加しました。`,
+			);
+		} else {
+			Logger.log(
+				`searchAndAppendVideos: ハッシュタグ「${hashtag}」で追加する新しい動画はありませんでした。`,
+			);
+		}
+	} catch (error) {
+		Logger.log(
+			`searchAndAppendVideos: エラーが発生しました (ハッシュタグ: ${hashtag}): ${error}`,
+		);
+		if (error instanceof Error && error.stack) {
+			Logger.log(error.stack);
+		}
+	}
 }
 
 // 当日分のデータ内で重複を削除する関数
 function removeDailyDuplicates(sheet: GoogleAppsScript.Spreadsheet.Sheet) {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  
-  const data = sheet.getDataRange().getValues();
-  const header = data[0];
-  const videoIdIndex = header.indexOf("動画ID");
-  const dateIndex = header.indexOf("取得日時");
-  
-  if (videoIdIndex === -1 || dateIndex === -1) {
-    Logger.log("必要なカラムが見つかりませんでした。");
-    return;
-  }
-  
-  // 当日のデータのみを抽出
-  const todayData = data.filter((row, index) => {
-    if (index === 0) return false; // ヘッダーをスキップ
-    const rowDate = new Date(row[dateIndex]);
-    return rowDate >= today;
-  });
-  
-  if (todayData.length <= 1) {
-    Logger.log("重複チェックの必要なし: 当日のデータが1件以下です。");
-    return;
-  }
-  
-  // 重複を検出（動画IDが同じで最新のものだけを残す）
-  const uniqueVideos = new Map();
-  const rowsToDelete: number[] = [];
-  
-  // データを逆順に処理して、同じ動画IDの最初の出現（最新）を保持
-  for (let i = todayData.length - 1; i >= 0; i--) {
-    const row = todayData[i];
-    const videoId = row[videoIdIndex];
-    
-    if (!uniqueVideos.has(videoId)) {
-      uniqueVideos.set(videoId, i);
-    } else {
-      // 重複している行は削除対象
-      const originalRowIndex = uniqueVideos.get(videoId);
-      const rowDate = new Date(row[dateIndex]);
-      const originalRowDate = new Date(todayData[originalRowIndex][dateIndex]);
-      
-      // 日付が新しい方を保持（同じ場合は既存のものを保持）
-      if (rowDate > originalRowDate) {
-        rowsToDelete.push(originalRowIndex);
-        uniqueVideos.set(videoId, i);
-      } else {
-        rowsToDelete.push(i);
-      }
-    }
-  }
-  
-  // 重複する行を削除（逆順で削除する）
-  if (rowsToDelete.length > 0) {
-    const headerRows = 1; // ヘッダー行の数
-    const firstDataRow = sheet.getFrozenRows() + 1;
-    
-    // 行番号を降順にソート
-    const sortedRowsToDelete = [...new Set(rowsToDelete)]
-      .map(i => i + firstDataRow) // 実際の行番号に変換
-      .sort((a, b) => b - a); // 降順にソート
-    
-    // 重複行を削除
-    for (const rowNum of sortedRowsToDelete) {
-      sheet.deleteRow(rowNum);
-    }
-    
-    Logger.log(`${rowsToDelete.length} 件の重複動画を削除しました。`);
-  } else {
-    Logger.log("重複する動画は見つかりませんでした。");
-  }
+	const today = new Date();
+	today.setHours(0, 0, 0, 0);
+
+	const data = sheet.getDataRange().getValues();
+	const header = data[0];
+	const videoIdIndex = header.indexOf("動画ID");
+	const dateIndex = header.indexOf("取得日時");
+
+	if (videoIdIndex === -1 || dateIndex === -1) {
+		Logger.log("必要なカラムが見つかりませんでした。");
+		return;
+	}
+
+	// 当日のデータのみを抽出
+	const todayData = data.filter((row, index) => {
+		if (index === 0) return false; // ヘッダーをスキップ
+		const rowDate = new Date(row[dateIndex]);
+		return rowDate >= today;
+	});
+
+	if (todayData.length <= 1) {
+		Logger.log("重複チェックの必要なし: 当日のデータが1件以下です。");
+		return;
+	}
+
+	// 重複を検出（動画IDが同じで最新のものだけを残す）
+	const uniqueVideos = new Map();
+	const rowsToDelete: number[] = [];
+
+	// データを逆順に処理して、同じ動画IDの最初の出現（最新）を保持
+	for (let i = todayData.length - 1; i >= 0; i--) {
+		const row = todayData[i];
+		const videoId = row[videoIdIndex];
+
+		if (!uniqueVideos.has(videoId)) {
+			uniqueVideos.set(videoId, i);
+		} else {
+			// 重複している行は削除対象
+			const originalRowIndex = uniqueVideos.get(videoId);
+			const rowDate = new Date(row[dateIndex]);
+			const originalRowDate = new Date(todayData[originalRowIndex][dateIndex]);
+
+			// 日付が新しい方を保持（同じ場合は既存のものを保持）
+			if (rowDate > originalRowDate) {
+				rowsToDelete.push(originalRowIndex);
+				uniqueVideos.set(videoId, i);
+			} else {
+				rowsToDelete.push(i);
+			}
+		}
+	}
+
+	// 重複する行を削除（逆順で削除する）
+	if (rowsToDelete.length > 0) {
+		const headerRows = 1; // ヘッダー行の数
+		const firstDataRow = sheet.getFrozenRows() + 1;
+
+		// 行番号を降順にソート
+		const sortedRowsToDelete = [...new Set(rowsToDelete)]
+			.map((i) => i + firstDataRow) // 実際の行番号に変換
+			.sort((a, b) => b - a); // 降順にソート
+
+		// 重複行を削除
+		for (const rowNum of sortedRowsToDelete) {
+			sheet.deleteRow(rowNum);
+		}
+
+		Logger.log(`${rowsToDelete.length} 件の重複動画を削除しました。`);
+	} else {
+		Logger.log("重複する動画は見つかりませんでした。");
+	}
 }
 
 // 日次更新を実行する関数
 async function dailyUpdate() {
-  try {
-    // スプレッドシートを取得または作成
-    const spreadsheet = getOrCreateSpreadsheet();
-    const sheet = getOrCreateSheet(spreadsheet, "YouTubeハッシュタグ分析_積み上げ");
+	try {
+		// スプレッドシートを取得または作成
+		const spreadsheet = getOrCreateSpreadsheet();
+		const sheet = getOrCreateSheet(
+			spreadsheet,
+			"YouTubeハッシュタグ分析_積み上げ",
+		);
 
-    // ヘッダーを設定
-    setupSheetHeaders(sheet);
+		// ヘッダーを設定
+		setupSheetHeaders(sheet);
 
-    // 各ハッシュタグに対して検索を実行し、新しい動画を追加
-    for (const hashtag of TARGET_HASHTAGS) {
-      await searchAndAppendVideos(hashtag, sheet);
-    }
+		// 各ハッシュタグに対して検索を実行し、新しい動画を追加
+		for (const hashtag of TARGET_HASHTAGS) {
+			await searchAndAppendVideos(hashtag, sheet);
+		}
 
-    // 当日分のデータ内で重複を削除
-    removeDailyDuplicates(sheet);
-    
-    Logger.log("日次更新が完了しました。");
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    Logger.log(`Error in dailyUpdate: ${errorMessage}`);
-    if (error instanceof Error && error.stack) {
-      Logger.log(error.stack);
-    }
-  }
+		// 当日分のデータ内で重複を削除
+		removeDailyDuplicates(sheet);
+
+		Logger.log("日次更新が完了しました。");
+	} catch (error) {
+		const errorMessage = error instanceof Error ? error.message : String(error);
+		Logger.log(`Error in dailyUpdate: ${errorMessage}`);
+		if (error instanceof Error && error.stack) {
+			Logger.log(error.stack);
+		}
+	}
 }
 
 // グローバルスコープに型をマージ
 interface GlobalWithMain {
-  main: () => void;
-  dailyUpdate: () => Promise<void>;
+	main: () => void;
+	dailyUpdate: () => Promise<void>;
 }
 
 // 手動実行用の関数
