@@ -723,13 +723,75 @@ async function dailyUpdate() {
 	}
 }
 
+// メインシートのデータを積み上げシートに日次でコピーする関数
+function appendDailySnapshot() {
+	try {
+		Logger.log("appendDailySnapshot: 積み上げ処理を開始します。");
+		const spreadsheet = getOrCreateSpreadsheet();
+		
+		// メインシートから最新データを取得
+		const mainSheet = spreadsheet.getSheetByName(SHEET_NAME);
+		if (!mainSheet || mainSheet.getLastRow() <= 1) {
+			Logger.log("appendDailySnapshot: メインシートにデータがありません。");
+			return;
+		}
+		
+		// 積み上げシートを取得または作成
+		const stackSheetName = "YouTubeハッシュタグ分析_積み上げ";
+		const stackSheet = getOrCreateSheet(spreadsheet, stackSheetName);
+		
+		// メインシートの全データを取得（ヘッダー含む）
+		const mainData = mainSheet.getDataRange().getValues();
+		const headers = mainData[0];
+		const dataRows = mainData.slice(1);
+		
+		if (dataRows.length === 0) {
+			Logger.log("appendDailySnapshot: メインシートにデータ行がありません。");
+			return;
+		}
+		
+		// 初回の場合はヘッダーを設定
+		if (stackSheet.getLastRow() === 0) {
+			stackSheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+			stackSheet.setFrozenRows(1);
+			stackSheet.getRange(1, 1, 1, headers.length).setFontWeight("bold");
+			stackSheet.autoResizeColumns(1, headers.length);
+			Logger.log("appendDailySnapshot: 積み上げシートにヘッダーを設定しました。");
+		}
+		
+		// 今日の日付でタイムスタンプを更新してデータを追加
+		const today = new Date();
+		const updatedRows = dataRows.map(row => {
+			const newRow = [...row];
+			newRow[0] = today; // 取得日時を今日に更新
+			return newRow;
+		});
+		
+		// 積み上げシートに追加
+		const lastRow = stackSheet.getLastRow();
+		stackSheet.getRange(lastRow + 1, 1, updatedRows.length, updatedRows[0].length)
+				 .setValues(updatedRows);
+		
+		Logger.log(`appendDailySnapshot: ${updatedRows.length}件のデータを積み上げシートに追加しました。`);
+		
+	} catch (error) {
+		const errorMessage = error instanceof Error ? error.message : String(error);
+		Logger.log(`Error in appendDailySnapshot: ${errorMessage}`);
+		if (error instanceof Error && error.stack) {
+			Logger.log(error.stack);
+		}
+	}
+}
+
 // グローバルスコープに型をマージ
 interface GlobalWithMain {
 	main: () => void;
 	dailyUpdate: () => Promise<void>;
+	appendDailySnapshot: () => void;
 }
 
 // 手動実行用の関数
 const globalObj = globalThis as unknown as GlobalWithMain;
 globalObj.main = main;
 globalObj.dailyUpdate = dailyUpdate;
+globalObj.appendDailySnapshot = appendDailySnapshot;
