@@ -153,12 +153,27 @@ async function fetchYouTubeVideoData(
 			return newRows;
 		}
 
-		const videosResponse = YouTube?.Videos?.list("snippet,statistics", {
-			id: videoIds.join(","),
-			part: "snippet,statistics",
-		});
+		// Videos APIも分割して呼び出し（50件ずつ）
+		const allVideos: any[] = [];
+		const batchSize = 50;
+		
+		for (let i = 0; i < videoIds.length; i += batchSize) {
+			const batchVideoIds = videoIds.slice(i, i + batchSize);
+			
+			const videosResponse = YouTube?.Videos?.list("snippet,statistics", {
+				id: batchVideoIds.join(","),
+				part: "snippet,statistics",
+			});
 
-		if (!videosResponse?.items || videosResponse.items.length === 0) {
+			if (videosResponse?.items && videosResponse.items.length > 0) {
+				allVideos.push(...videosResponse.items);
+				Logger.log(
+					`fetchYouTubeVideoData: ハッシュタグ「${hashtag}」動画詳細 ${Math.floor(i/batchSize) + 1}バッチ: ${videosResponse.items.length}件取得`,
+				);
+			}
+		}
+
+		if (allVideos.length === 0) {
 			Logger.log(
 				"fetchYouTubeVideoData: 動画の詳細情報を取得できませんでした。",
 			);
@@ -167,7 +182,7 @@ async function fetchYouTubeVideoData(
 
 		const channelIds = [
 			...new Set(
-				videosResponse.items
+				allVideos
 					.map((video) => video.snippet?.channelId)
 					.filter((id): id is string => !!id),
 			),
@@ -194,7 +209,7 @@ async function fetchYouTubeVideoData(
 			}
 		}
 
-		for (const video of videosResponse.items) {
+		for (const video of allVideos) {
 			if (!video.id || !video.snippet) continue;
 
 			const channelId = video.snippet.channelId;
