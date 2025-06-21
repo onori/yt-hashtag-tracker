@@ -343,8 +343,8 @@ function removeDuplicateVideos(sheet: GoogleAppsScript.Spreadsheet.Sheet) {
 	}
 }
 
-// 日次統計を更新する関数
-function updateDailyStats() {
+// 日次統計を更新する関数（重複削除前の生データから統計を計算）
+async function updateDailyStats() {
 	try {
 		const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
 
@@ -368,22 +368,31 @@ function updateDailyStats() {
 		today.setHours(0, 0, 0, 0);
 		const todayStr = Utilities.formatDate(today, "Asia/Tokyo", "yyyy/MM/dd");
 
-		const dataSheet = spreadsheet.getSheetByName(SHEET_NAME);
-		if (!dataSheet) {
-			throw new Error(`シート '${SHEET_NAME}' が見つかりません`);
+		// 重複削除前の生データを取得するため、各ハッシュタグで直接YouTube APIを呼び出し
+		const publishedAfterISO = new Date(
+			Date.now() - 365 * 24 * 60 * 60 * 1000,
+		).toISOString();
+		
+		const allRawData: FormattedVideoData[] = [];
+		
+		// 各ハッシュタグから生データを取得
+		for (const hashtag of TARGET_HASHTAGS) {
+			Logger.log(`updateDailyStats: ハッシュタグ「${hashtag}」の生データを取得中...`);
+			const rawData = await fetchYouTubeVideoData(hashtag, publishedAfterISO);
+			allRawData.push(...rawData);
 		}
 
-		// データを取得（ヘッダー行を除く）
-		const lastRow = dataSheet.getLastRow();
-		if (lastRow <= 1) return; // データがない場合はスキップ
+		if (allRawData.length === 0) {
+			Logger.log("updateDailyStats: 統計計算用のデータが見つかりませんでした。");
+			return;
+		}
 
-		const dataRange = dataSheet.getRange(2, 1, lastRow - 1, 15); // 15列分のデータを取得
-		const data = dataRange.getValues();
+		Logger.log(`updateDailyStats: ${allRawData.length}件の生データから統計を計算します。`);
 
-		// 各ハッシュタグと動画タイプごとに統計を計算
+		// 各ハッシュタグと動画タイプごとに統計を計算（重複削除前のデータを使用）
 		for (const hashtag of TARGET_HASHTAGS) {
 			// 通常動画の統計
-			const regularVideos = data.filter(
+			const regularVideos = allRawData.filter(
 				(row) => row[1] === hashtag && row[3] === "通常",
 			);
 
@@ -391,7 +400,7 @@ function updateDailyStats() {
 			const regularChannelCount = new Set(regularVideos.map((row) => row[6]))
 				.size; // チャンネル名でユニークカウント
 			const regularTotalViews = regularVideos.reduce(
-				(sum, row) => sum + (Number.parseInt(row[10] || "0", 10) || 0),
+				(sum, row) => sum + (row[10] || 0),
 				0,
 			);
 
@@ -404,15 +413,17 @@ function updateDailyStats() {
 				regularTotalViews,
 			]);
 
+			Logger.log(`updateDailyStats: ${hashtag} 通常動画 - 動画数:${regularVideos.length}, チャンネル数:${regularChannelCount}, 総再生回数:${regularTotalViews}`);
+
 			// ショート動画の統計
-			const shortVideos = data.filter(
+			const shortVideos = allRawData.filter(
 				(row) => row[1] === hashtag && row[3] === "ショート",
 			);
 
 			// ショート動画の統計を常に出力（動画がなくても0で出力）
 			const shortChannelCount = new Set(shortVideos.map((row) => row[6])).size;
 			const shortTotalViews = shortVideos.reduce(
-				(sum, row) => sum + (Number.parseInt(row[10] || "0", 10) || 0),
+				(sum, row) => sum + (row[10] || 0),
 				0,
 			);
 
@@ -424,6 +435,8 @@ function updateDailyStats() {
 				shortChannelCount,
 				shortTotalViews,
 			]);
+
+			Logger.log(`updateDailyStats: ${hashtag} ショート動画 - 動画数:${shortVideos.length}, チャンネル数:${shortChannelCount}, 総再生回数:${shortTotalViews}`);
 		}
 
 		// ソート（日付の降順、ハッシュタグ、動画タイプ）
@@ -433,7 +446,7 @@ function updateDailyStats() {
 			{ column: 3, ascending: true },
 		]);
 
-		Logger.log("日次統計を更新しました。");
+		Logger.log("日次統計を更新しました（重複削除前の生データを使用）。");
 	} catch (error) {
 		const errorMessage = error instanceof Error ? error.message : String(error);
 		Logger.log(`Error in updateDailyStats: ${errorMessage}`);
@@ -587,7 +600,6 @@ async function searchAndAppendVideos(
 		`searchAndAppendVideos: ハッシュタグ「${hashtag}」で動画を検索中...`,
 	);
 	try {
-		const now = new Date();
 		const publishedAfterISO = new Date(
 			Date.now() - 365 * 24 * 60 * 60 * 1000,
 		).toISOString();
@@ -673,7 +685,6 @@ function removeDailyDuplicates(sheet: GoogleAppsScript.Spreadsheet.Sheet) {
 
 	// 重複する行を削除（逆順で削除する）
 	if (rowsToDelete.length > 0) {
-		const headerRows = 1; // ヘッダー行の数
 		const firstDataRow = sheet.getFrozenRows() + 1;
 
 		// 行番号を降順にソート
@@ -788,6 +799,8 @@ interface GlobalWithMain {
 	main: () => void;
 	dailyUpdate: () => Promise<void>;
 	appendDailySnapshot: () => void;
+	updateDailyStats: () => Promise<void>;
+	updateSubscriberHistory: () => void;
 }
 
 // 手動実行用の関数
@@ -795,3 +808,5 @@ const globalObj = globalThis as unknown as GlobalWithMain;
 globalObj.main = main;
 globalObj.dailyUpdate = dailyUpdate;
 globalObj.appendDailySnapshot = appendDailySnapshot;
+globalObj.updateDailyStats = updateDailyStats;
+globalObj.updateSubscriberHistory = updateSubscriberHistory;
