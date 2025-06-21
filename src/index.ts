@@ -104,26 +104,47 @@ async function fetchYouTubeVideoData(
 	const fetchTime = new Date(); // 取得日時を一括で設定するため最初に取得
 
 	try {
-		// YouTube Data APIを使用して動画を検索
-		const searchResponse = YouTube?.Search?.list("id,snippet", {
-			q: hashtag,
-			type: "video",
-			part: "snippet",
-			maxResults: 50,
-			order: "date",
-			publishedAfter: publishedAfterISO,
-		});
+		// YouTube Data APIを使用して動画を検索（ページネーション対応）
+		const allVideoIds: string[] = [];
+		let nextPageToken: string | undefined = undefined;
+		let pageCount = 0;
+		const maxPages = 10; // 最大10ページ（500件）まで取得
+		
+		do {
+			const searchResponse = YouTube?.Search?.list("id,snippet", {
+				q: hashtag,
+				type: "video",
+				part: "snippet",
+				maxResults: 50,
+				order: "date",
+				publishedAfter: publishedAfterISO,
+				pageToken: nextPageToken,
+			});
 
-		if (!searchResponse?.items || searchResponse.items.length === 0) {
+			if (!searchResponse?.items || searchResponse.items.length === 0) {
+				if (pageCount === 0) {
+					Logger.log(
+						`fetchYouTubeVideoData: ハッシュタグ「${hashtag}」の動画は見つかりませんでした。`,
+					);
+				}
+				break;
+			}
+
+			const pageVideoIds = searchResponse.items
+				.map((item) => item.id?.videoId)
+				.filter((id): id is string => !!id);
+			
+			allVideoIds.push(...pageVideoIds);
+			nextPageToken = searchResponse.nextPageToken;
+			pageCount++;
+			
 			Logger.log(
-				`fetchYouTubeVideoData: ハッシュタグ「${hashtag}」の動画は見つかりませんでした。`,
+				`fetchYouTubeVideoData: ハッシュタグ「${hashtag}」ページ${pageCount}: ${pageVideoIds.length}件取得（累計: ${allVideoIds.length}件）`,
 			);
-			return newRows;
-		}
-
-		const videoIds = searchResponse.items
-			.map((item) => item.id?.videoId)
-			.filter((id): id is string => !!id);
+			
+		} while (nextPageToken && pageCount < maxPages);
+		
+		const videoIds = allVideoIds;
 
 		if (videoIds.length === 0) {
 			Logger.log(
@@ -794,6 +815,117 @@ function appendDailySnapshot() {
 	}
 }
 
+// テスト用: 重複削除前後の統計比較関数
+async function testDuplicateStats() {
+	try {
+		Logger.log("=== 重複削除前後の統計比較テスト開始 ===");
+		
+		const publishedAfterISO = new Date(
+			Date.now() - 365 * 24 * 60 * 60 * 1000,
+		).toISOString();
+		
+		const allRawData: FormattedVideoData[] = [];
+		const duplicateAnalysis = new Map<string, string[]>(); // 動画ID -> ハッシュタグ配列
+		
+		// 各ハッシュタグから生データを取得
+		for (const hashtag of TARGET_HASHTAGS) {
+			Logger.log(`テスト: ハッシュタグ「${hashtag}」の生データを取得中...`);
+			const rawData = await fetchYouTubeVideoData(hashtag, publishedAfterISO);
+			allRawData.push(...rawData);
+			
+			// 重複分析用のデータを収集
+			for (const row of rawData) {
+				const videoId = row[2] as string;
+				const currentHashtag = row[1] as string;
+				
+				if (!duplicateAnalysis.has(videoId)) {
+					duplicateAnalysis.set(videoId, []);
+				}
+				duplicateAnalysis.get(videoId)!.push(currentHashtag);
+			}
+		}
+		
+		Logger.log(`テスト: 生データ総数 ${allRawData.length}件を取得`);
+		
+		// 重複分析結果を出力
+		let duplicateCount = 0;
+		let multiHashtagVideos = 0;
+		
+		for (const [videoId, hashtags] of duplicateAnalysis.entries()) {
+			if (hashtags.length > 1) {
+				multiHashtagVideos++;
+				duplicateCount += hashtags.length - 1;
+				Logger.log(`重複検出: 動画ID=${videoId}, ハッシュタグ=[${hashtags.join(", ")}]`);
+			}
+		}
+		
+		Logger.log(`=== 重複分析結果 ===`);
+		Logger.log(`複数ハッシュタグを持つ動画数: ${multiHashtagVideos}件`);
+		Logger.log(`重複により削除される行数: ${duplicateCount}件`);
+		Logger.log(`重複削除前データ数: ${allRawData.length}件`);
+		Logger.log(`重複削除後データ数: ${allRawData.length - duplicateCount}件`);
+		
+		// 重複削除前の統計を計算
+		Logger.log(`=== 重複削除前の統計 ===`);
+		for (const hashtag of TARGET_HASHTAGS) {
+			const regularVideos = allRawData.filter(
+				(row) => row[1] === hashtag && row[3] === "通常",
+			);
+			const shortVideos = allRawData.filter(
+				(row) => row[1] === hashtag && row[3] === "ショート",
+			);
+			
+			const regularChannelCount = new Set(regularVideos.map(row => row[6])).size;
+			const regularTotalViews = regularVideos.reduce((sum, row) => sum + (row[10] || 0), 0);
+			const shortChannelCount = new Set(shortVideos.map(row => row[6])).size;
+			const shortTotalViews = shortVideos.reduce((sum, row) => sum + (row[10] || 0), 0);
+			
+			Logger.log(`${hashtag} 通常: ${regularVideos.length}件, ${regularChannelCount}チャンネル, ${regularTotalViews}再生`);
+			Logger.log(`${hashtag} ショート: ${shortVideos.length}件, ${shortChannelCount}チャンネル, ${shortTotalViews}再生`);
+		}
+		
+		// 重複削除後のデータを作成（removeDuplicateVideosの仕組みを模倣）
+		const videoMap = new Map();
+		const sortedData = [...allRawData].sort((a, b) => new Date(b[0] as Date).getTime() - new Date(a[0] as Date).getTime());
+		
+		for (const row of sortedData) {
+			const videoId = row[2];
+			if (!videoMap.has(videoId)) {
+				videoMap.set(videoId, row);
+			}
+		}
+		
+		const uniqueData = Array.from(videoMap.values());
+		
+		Logger.log(`=== 重複削除後の統計 ===`);
+		for (const hashtag of TARGET_HASHTAGS) {
+			const regularVideos = uniqueData.filter(
+				(row) => row[1] === hashtag && row[3] === "通常",
+			);
+			const shortVideos = uniqueData.filter(
+				(row) => row[1] === hashtag && row[3] === "ショート",
+			);
+			
+			const regularChannelCount = new Set(regularVideos.map(row => row[6])).size;
+			const regularTotalViews = regularVideos.reduce((sum, row) => sum + (row[10] || 0), 0);
+			const shortChannelCount = new Set(shortVideos.map(row => row[6])).size;
+			const shortTotalViews = shortVideos.reduce((sum, row) => sum + (row[10] || 0), 0);
+			
+			Logger.log(`${hashtag} 通常: ${regularVideos.length}件, ${regularChannelCount}チャンネル, ${regularTotalViews}再生`);
+			Logger.log(`${hashtag} ショート: ${shortVideos.length}件, ${shortChannelCount}チャンネル, ${shortTotalViews}再生`);
+		}
+		
+		Logger.log("=== 重複削除前後の統計比較テスト完了 ===");
+		
+	} catch (error) {
+		const errorMessage = error instanceof Error ? error.message : String(error);
+		Logger.log(`Error in testDuplicateStats: ${errorMessage}`);
+		if (error instanceof Error && error.stack) {
+			Logger.log(error.stack);
+		}
+	}
+}
+
 // グローバルスコープに型をマージ
 interface GlobalWithMain {
 	main: () => void;
@@ -801,6 +933,7 @@ interface GlobalWithMain {
 	appendDailySnapshot: () => void;
 	updateDailyStats: () => Promise<void>;
 	updateSubscriberHistory: () => void;
+	testDuplicateStats: () => Promise<void>;
 }
 
 // 手動実行用の関数
@@ -810,3 +943,4 @@ globalObj.dailyUpdate = dailyUpdate;
 globalObj.appendDailySnapshot = appendDailySnapshot;
 globalObj.updateDailyStats = updateDailyStats;
 globalObj.updateSubscriberHistory = updateSubscriberHistory;
+globalObj.testDuplicateStats = testDuplicateStats;
