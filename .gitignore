@@ -38,3 +38,7 @@ Thumbs.db
 *.tsbuildinfo
 
 credentials.json
+
+# テスト・検証用ファイル
+test-*.ts
+*.csv
